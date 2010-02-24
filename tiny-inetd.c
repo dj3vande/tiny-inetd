@@ -92,10 +92,9 @@ int main(int argc,char **argv)
 
 		sock=accept(lis,(struct sockaddr *)&remote,&len);
 
-		fprintf(stderr,"Got connection from %s\n",inet_ntoa(remote.sin_addr));
-
 		if(sock >= 0)
 		{
+			fprintf(stderr,"Got connection from %s\n",inet_ntoa(remote.sin_addr));
 			ret=fork();
 			if(ret < 0)
 			{
@@ -106,6 +105,11 @@ int main(int argc,char **argv)
 			else if(ret==0)
 			{
 				/*child*/
+
+				if(setsid() == -1)
+				{
+					fprintf(stderr,"setsid() failed!  Unable to detach from terminal\n");
+				}
 				if(dup2(sock,0)==-1 || dup2(sock,1)==-1)
 				{
 					perror("dup2");
