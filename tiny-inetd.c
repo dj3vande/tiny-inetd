@@ -1,4 +1,8 @@
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <errno.h>
 #include <signal.h>
@@ -32,6 +36,7 @@ int main(int argc,char **argv)
 	unsigned short port;
 	char *endptr;
 	int ret;
+	struct sockaddr_in addr={0};
 
 	myname=argv[0];
 	argc--; argv++;
@@ -42,7 +47,7 @@ int main(int argc,char **argv)
 		exit(0);
 	}
 
-	temp_ul=strtoul(argv[0],10,&endptr);
+	temp_ul=strtoul(argv[0],&endptr,10);
 	if(temp_ul==0 || temp_ul > (unsigned short)-1 || *endptr!='\0')
 	{
 		fprintf(stderr,"Usage: %s port cmd args...\n",myname);
@@ -52,7 +57,31 @@ int main(int argc,char **argv)
 	argc--; argv++;
 
 	/*Set up socket*/
+	lis=socket(PF_INET,SOCK_STREAM,IPPROTO_TCP);
+	if(lis==-1)
+	{
+		perror("socket");
+		exit(EXIT_FAILURE);
+	}
+	addr.sin_family=AF_INET;
+	addr.sin_port=htons(port);
+	addr.sin_addr.s_addr=INADDR_ANY;
+	if(bind(lis,(struct sockaddr *)&addr,sizeof addr) == -1)
+	{
+		perror("bind");
+		close(lis);
+		exit(EXIT_FAILURE);
+	}
+	if(listen(lis,128) == -1)
+	{
+		perror("listen");
+		close(lis);
+		exit(EXIT_FAILURE);
+	}
 	fprintf(stderr,"Listening on port %hu\n",port);
+
+	signal(SIGINT,sighandler);
+	signal(SIGCHLD,sighandler);
 
 	while(1)
 	{
@@ -62,9 +91,9 @@ int main(int argc,char **argv)
 
 		sock=accept(lis,(struct sockaddr *)&remote,&len);
 
-		/*Log that we've accepted a connection?*/
+		fprintf(stderr,"Got connection from %s\n",inet_ntoa(remote.sin_addr));
 
-		if(ret >= 0)
+		if(sock >= 0)
 		{
 			ret=fork();
 			if(ret < 0)
@@ -93,21 +122,27 @@ int main(int argc,char **argv)
 				close(sock);
 			}
 		}
+#if 0	/*XXX HACK Darwin seems to mishandle signals while accept() is blocking*/
 		else if(errno==EINTR)
 		{
+#endif
 			if(interrupted)
 			{
 				fprintf(stderr,"Interrupted, cleaning up\n");
 				break;	/*out of loop*/
 			}
-			if(child_waiting)
+			if(child_done)
 			{
 				/*Clean up children*/
-				child_waiting=0;
-				while(waitpid(-1,WNOHANG,&ret) > 0)
-					;
+				child_done=0;
+				while(waitpid(-1,&ret,WNOHANG) > 0)
+				{
+					fprintf(stderr,"Child process finished\n");
+				}
 			}
+#if 0	/*XXX HACK Darwin seems to mishandle signals while accept() is blocking*/
 		}
+#endif
 	}
 
 	/*We only get here on normal exit - if a syscall fails, we bail out
