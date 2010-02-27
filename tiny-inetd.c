@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -19,9 +20,11 @@ void sighandler(int sig)
 	switch(sig)
 	{
 	case SIGINT:
+write(2,"Caught SIGINT\n",14);
 		interrupted=1;
 		break;
 	case SIGCHLD:
+write(2,"Caught SIGCHLD\n",15);
 		child_done=1;
 		break;
 	}
@@ -86,68 +89,85 @@ int main(int argc,char **argv)
 
 	while(1)
 	{
-		struct sockaddr_in remote;
-		socklen_t len=sizeof remote;
-		int sock;
+		fd_set rd;
 
-		sock=accept(lis,(struct sockaddr *)&remote,&len);
-
-		if(sock >= 0)
+		/*MacOS 10.4 has a buggy accept that stays blocked
+		    even if a signal comes in.
+		  select works properly, so block in select and then
+		    accept if there's a connection ready.
+		*/
+		FD_ZERO(&rd);
+		FD_SET(lis,&rd);
+		if(select(lis+1,&rd,NULL,NULL,NULL) > 0)
 		{
-			fprintf(stderr,"Got connection from %s\n",inet_ntoa(remote.sin_addr));
-			ret=fork();
-			if(ret < 0)
+			/*connection ready*/
+			struct sockaddr_in remote;
+			socklen_t len=sizeof remote;
+			int sock=accept(lis,(struct sockaddr *)&remote,&len);
+			if(sock >= 0)
 			{
-				/*fork() failed*/
-				perror("fork");
-				exit(EXIT_FAILURE);
-			}
-			else if(ret==0)
-			{
-				/*child*/
-
-				if(setsid() == -1)
+				fprintf(stderr,"Got connection from %s\n",inet_ntoa(remote.sin_addr));
+				ret=fork();
+				if(ret < 0)
 				{
-					fprintf(stderr,"setsid() failed!  Unable to detach from terminal\n");
-				}
-				if(dup2(sock,0)==-1 || dup2(sock,1)==-1)
-				{
-					perror("dup2");
+					/*fork() failed*/
+					perror("fork");
 					exit(EXIT_FAILURE);
 				}
-				execvp(argv[0],argv);
-				/*If we get here, exec failed*/
-				perror("exec");
-				exit(EXIT_FAILURE);
-				/*If we get here, the world is about to end*/
-			}
-			else
-			{
-				/*parent*/
-				close(sock);
-			}
-		}
-#if 0	/*XXX HACK Darwin seems to mishandle signals while accept() is blocking*/
-		else if(errno==EINTR)
-		{
-#endif
-			if(interrupted)
-			{
-				fprintf(stderr,"Interrupted, cleaning up\n");
-				break;	/*out of loop*/
-			}
-			if(child_done)
-			{
-				/*Clean up children*/
-				child_done=0;
-				while(waitpid(-1,&ret,WNOHANG) > 0)
+				else if(ret==0)
 				{
-					fprintf(stderr,"Child process finished\n");
+					/*child*/
+
+					if(setsid() == -1)
+					{
+						fprintf(stderr,"setsid() failed!  Unable to detach from terminal\n");
+					}
+					if(dup2(sock,0)==-1 || dup2(sock,1)==-1)
+					{
+						perror("dup2");
+						exit(EXIT_FAILURE);
+					}
+					execvp(argv[0],argv);
+					/*If we get here, exec failed*/
+					perror("exec");
+					exit(EXIT_FAILURE);
+					/*If we get here, the world is about to end*/
 				}
+				else
+				{
+					/*parent*/
+					close(sock);
+				}
+			}/*if accept succeeded*/
+			else if(errno!=EINTR)
+			{
+				perror("accept");
+				exit(EXIT_FAILURE);
 			}
-#if 0	/*XXX HACK Darwin seems to mishandle signals while accept() is blocking*/
+		}/*if select returned >0*/
+		else if(errno!=EINTR)
+		{
+			perror("select");
+			exit(EXIT_FAILURE);
 		}
-#endif
+
+		/*Check signal flags even if we didn't get EINTR - we
+		    may have caught a signal while select wasn't running
+		*/
+		if(interrupted)
+		{
+			fprintf(stderr,"Interrupted, cleaning up\n");
+			break;	/*out of loop*/
+		}
+		if(child_done)
+		{
+			/*Clean up children*/
+			child_done=0;
+			while(waitpid(-1,&ret,WNOHANG) > 0)
+			{
+				fprintf(stderr,"Child process finished\n");
+			}
+		}
 	}
 
 	/*We only get here on normal exit - if a syscall fails, we bail out
