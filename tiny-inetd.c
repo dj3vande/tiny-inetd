@@ -20,11 +20,9 @@ void sighandler(int sig)
 	switch(sig)
 	{
 	case SIGINT:
-write(2,"Caught SIGINT\n",14);
 		interrupted=1;
 		break;
 	case SIGCHLD:
-write(2,"Caught SIGCHLD\n",15);
 		child_done=1;
 		break;
 	}
