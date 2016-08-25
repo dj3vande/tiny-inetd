@@ -89,10 +89,10 @@ int main(int argc,char **argv)
 	{
 		fd_set rd;
 
-		/*MacOS 10.4 has a buggy accept that stays blocked
-		    even if a signal comes in.
-		  select works properly, so block in select and then
-		    accept if there's a connection ready.
+		/*on BSD, accept restarts by default instead of failing
+		    with EINTR when SIGINT arrives.
+		  select works the way we want, so block in select and
+		    then accept if there's a connection ready.
 		*/
 		FD_ZERO(&rd);
 		FD_SET(lis,&rd);
